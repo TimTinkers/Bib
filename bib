@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+
+## Bib is a simple SSH connection manager.
+## @author Tim Clancy
+## @date 9.17.2020
+
+## Create the Bib configuration file if it doesn't exist.
+BIB_CONFIG="${HOME}/.config/bib"
+if [ ! -d "${BIB_CONFIG}" ]; then
+  mkdir -p "${BIB_CONFIG}"
+fi
+
+## Initialize a new configuration file.
+initialize () {
+  rm -f "$BIB_CONFIG/$NAME.conf"
+  rm -f "$BIB_CONFIG/$NAME-password"
+  rm -f "$BIB_CONFIG/$NAME-key"
+  touch "$BIB_CONFIG/$NAME.conf"
+  echo "NAME=$NAME" >> "$BIB_CONFIG/$NAME.conf"
+  echo "HOST=$HOST" >> "$BIB_CONFIG/$NAME.conf"
+  echo "INITIALIZED=false" >> "$BIB_CONFIG/$NAME.conf"
+}
+
+## Add a new listing to Bib storage.
+add () {
+  NAME=$1
+  HOST=$2
+  MODE=$3
+
+  ## Bib has been given a password; convert to a password file.
+  if [[ $MODE == "-p" ]]; then
+    read -s -p "$HOST's password: " PASSWORD
+    echo ""
+    initialize
+
+    ## Convert the password to a protected file and track it.
+    echo $PASSWORD > "$BIB_CONFIG/$NAME-password"
+    chmod 600 "$BIB_CONFIG/$NAME-password"
+    echo "MODE=PASSWORD_FILE" >> "$BIB_CONFIG/$NAME.conf"
+    echo "KEY=$BIB_CONFIG/$NAME-password" >> "$BIB_CONFIG/$NAME.conf"
+
+  ## Bib has been given a password file; create a copy.
+  elif [[ $MODE == "-pf" ]]; then
+    initialize
+
+    ## Copy the password file and track it.
+    cp $4 "$BIB_CONFIG/$NAME-password"
+    chmod 600 "$BIB_CONFIG/$NAME-password"
+    echo "MODE=PASSWORD_FILE" >> "$BIB_CONFIG/$NAME.conf"
+    echo "KEY=$BIB_CONFIG/$NAME-password" >> "$BIB_CONFIG/$NAME.conf"
+
+  ## Bib has been given a key file; create a copy.
+  elif [[ $MODE == "-kf" ]]; then
+    initialize
+
+    ## Copy the key file and track it.
+    cp $4 "$BIB_CONFIG/$NAME-key"
+    chmod 600 "$BIB_CONFIG/$NAME-key"
+    echo "MODE=KEY_FILE" >> "$BIB_CONFIG/$NAME.conf"
+    echo "KEY=$BIB_CONFIG/$NAME-key" >> "$BIB_CONFIG/$NAME.conf"
+
+  ## Bib has no idea what it's been given; tell the user what they should do.
+  else
+    echo "bib add <name> <host>"
+    echo "  < -p > or"
+    echo "  < -pf > <password file> or"
+    echo "  < -kf > <key file>"
+  fi
+}
+
+## Remove the a particular listing from Bib storage.
+remove () {
+  if [[ $1 == "" ]]; then
+    echo "bib rm <name>"
+  else
+    rm -f "$BIB_CONFIG/$1.conf"
+    rm -f "$BIB_CONFIG/$1-password"
+    rm -f "$BIB_CONFIG/$1-key"
+  fi
+}
+
+## List available Bib connections.
+list () {
+  for FILE in $(ls $BIB_CONFIG | grep -x ".*\.conf"); do
+    echo "${FILE%.*}"
+  done
+}
+
+## Connect to a particular listing in Bib storage.
+connect () {
+  NAME=$1
+  if [ ! -f $BIB_CONFIG/$NAME.conf ]; then
+    echo "* there is no stored connection with the name $NAME"
+    exit 1
+  fi
+  source "$BIB_CONFIG/$NAME.conf"
+
+  ## If the connection should initialize, then do so.
+  if [ "$INITIALIZED" = false ]; then
+    sed -i 's/INITIALIZED=.*/INITIALIZED=true/' "$BIB_CONFIG/$NAME.conf"
+    infocmp > terminal.terminfo
+    if [ "$MODE" = "PASSWORD_FILE" ]; then
+      sshpass -f "$KEY" scp terminal.terminfo $HOST:~/
+      rm terminal.terminfo
+      sshpass -f "$KEY" ssh -t $HOST "tic terminal.terminfo; rm terminal.terminfo; bash -l"
+    elif [ "$MODE" = "KEY_FILE" ]; then
+      scp -i $KEY terminal.terminfo $HOST:~/
+      rm terminal.terminfo
+      ssh -i $KEY -t $HOST "tic terminal.terminfo; rm terminal.terminfo; bash -l"
+    else
+      echo "* unable to validate authentication mode for connection $NAME"
+      exit 1
+    fi
+  else
+    if [ "$MODE" = "PASSWORD_FILE" ]; then
+      sshpass -f "$KEY" ssh $HOST
+    elif [ "$MODE" = "KEY_FILE" ]; then
+      ssh -i $KEY $HOST
+    else
+      echo "* unable to validate authentication mode for connection $NAME"
+      exit 1
+    fi
+  fi
+}
+
+## Display helpful commands for operating Bib.
+help () {
+  echo "Bib is an SSH connection manager."
+  echo "Generally, to connect to a server, first you *add* it then you *connect* to it."
+  echo ""
+  echo "Commands:"
+  echo "- add; stores a new connection with Bib for using later:"
+  echo "bib add <name> <host>"
+  echo "  < -p > or"
+  echo "  < -pf > <password file> or"
+  echo "  < -kf > <key file>"
+  echo "- remove (rm); removes a connection stored with Bib:"
+  echo "bib remove <name>"
+  echo "- list (ls); lists connections that are available for Bib:"
+  echo "bib list"
+  echo "- connect (con); connect to a stored connection given its name:"
+  echo "bib connect <name>"
+  echo "- help (h); displays this help menu:"
+  echo "bib help"
+}
+
+## Bib should add/overwrite a stored connection.
+if [[ $1 == "add" ]]; then
+  add $2 $3 $4 $5
+
+## Bib should remove a stored connection.
+elif [[ $1 == "remove" ]]; then
+  remove $2
+elif [[ $1 == "rm" ]]; then
+  remove $2
+
+## Bib should list stored connections.
+elif [[ $1 == "list" ]]; then
+  list
+elif [[ $1 == "ls" ]]; then
+  list
+
+## Bib should connect to a stored connection.
+elif [[ $1 == "connect" ]]; then
+  connect $2
+elif [[ $1 == "con" ]]; then
+  connect $2
+
+## Bib should be helpful.
+elif [[ $1 == "" ]]; then
+  help
+elif [[ $1 == "help" ]]; then
+  help
+elif [[ $1 == "h" ]]; then
+  help
+
+## Bib should default to trying to just SSH into what might be a hostname.
+else
+  connect $1
+fi
